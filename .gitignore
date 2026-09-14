@@ -1,0 +1,29 @@
+# Python / Byte-compiled files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Databases & local storage
+*.sqlite
+*.sqlite3
+*.db
+
+
+
+# IDE & OS meta
+.vscode/
+.idea/
+.DS_Store
+*.swp
