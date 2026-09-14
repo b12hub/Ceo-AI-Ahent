@@ -214,7 +214,7 @@ The agent is containerized for seamless deployment on the company's Ubuntu VPS.
 **1. Clone & Configure Environment**
 
 ```bash
-git clone <repo_url>
+git clone https://github.com/b12hub/Ceo-AI-Ahent.git
 cd ceo-ai-agent
 cp .env.example .env
 
