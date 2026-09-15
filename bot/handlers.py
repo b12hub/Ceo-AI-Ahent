@@ -1,9 +1,12 @@
+# bot/handlers.py
 """
 bot/handlers.py
 
-/start, /help, /reset, free-text handlers, and Human-in-the-Loop CallbackQuery handlers.
-Includes HTTPS validation for Telegram Web Apps, executive response formatting,
-message-ID tracking, TelegramBadRequest handling, and Uzbek localization.
+/start, /help, /about, /reset, file upload and free-text handlers, and Human-in-the-Loop CallbackQuery handlers.
+
+Robust PDF handling: downloads to BytesIO and performs synchronous PDF parsing inside asyncio.to_thread()
+to avoid blocking the event loop. Logs full tracebacks on parse errors and surfaces exception text to the
+user for easier debugging.
 """
 
 from __future__ import annotations
@@ -24,13 +27,13 @@ from aiogram.types import (
     Message,
     WebAppInfo,
 )
-from sqlmodel import delete, select
+from sqlmodel import delete, select, Session
 
 from agent.db import get_session
 from agent.loop import run_agent_turn
 from agent.models_bot_messages import BotSentMessage
 from agent.models_conversation import ConversationMessage
-from agent.pending_actions import pop_pending, get_pending
+from agent.pending_actions import pop_pending
 from agent.tools import registry
 from bot.config import DASHBOARD_BASE_URL
 from bot.formatting import sanitize_for_telegram
@@ -115,6 +118,7 @@ async def cmd_start(message: Message) -> None:
         f"Kompaniya topshiriqlari, strategik qarorlar, uchrashuvlar va hujjatlar bo'yicha savollaringizga javob berishga tayyorman.\n\n"
         f"⚡ <b>Tezkor Buyruqlar:</b>\n"
         f"• /help — Tizim imkoniyatlari sharhi\n"
+        f"• /about — Bot haqida qisqacha ma'lumot\n"
         f"• /reset — Muloqot tarixini tozalash va yangidan boshlash\n\n"
         f"💡 <i>Sinab ko'ring: \"Bugungi kunlik brifingni ber\" yoki \"Mening zimmamda qanday topshiriqlar bor?\"</i>"
     )
@@ -132,6 +136,7 @@ async def cmd_help(message: Message) -> None:
         f"• <b>Bilimlar Bazasi:</b> Kompaniya hujjatlari bo'yicha semantik qidiruv.\n\n"
         f"⚙️ <b>Tizim Buyruqlari:</b>\n"
         f"• /start — Xush kelibsiz xabari va panel havolasi\n"
+        f"• /about — Bot haqida qisqacha ma'lumot\n"
         f"• /reset — Muloqot xotirasi va chat tarixini o'chirish"
     )
     await _send_tracked(message, text, reply_markup=_dashboard_keyboard())
@@ -242,10 +247,35 @@ async def handle_action_cancel(callback: CallbackQuery) -> None:
     """Cancel a pending write action when CEO rejects it."""
     pending_id = callback.data.split(":", 1)[1] if callback.data else ""
     # Remove from store if present
-    pending = pop_pending(pending_id)
+    _ = pop_pending(pending_id)
     await callback.answer("Amal bekor qilindi.", show_alert=False)
     if callback.message and isinstance(callback.message, Message):
         await callback.message.edit_text("❌ <b>Amal bekor qilindi.</b>\nBu amal bazaga kiritilmadi.")
+
+
+# --- Document and free-text handler with robust PDF extraction ---
+async def _extract_pdf_text_bytes(data: bytes) -> str:
+    """Extract text from PDF bytes using pdfplumber or PyPDF2 inside a thread."""
+    def _sync_extract():
+        # Try pdfplumber first (better layout), then fall back to PyPDF2
+        try:
+            import pdfplumber
+            with pdfplumber.open(io.BytesIO(data)) as pdf:
+                pages = [p.extract_text() or "" for p in pdf.pages]
+                return "\n".join(pages)
+        except Exception:
+            # Fallback PyPDF2
+            from PyPDF2 import PdfReader
+            reader = PdfReader(io.BytesIO(data))
+            texts = []
+            for page in reader.pages:
+                try:
+                    texts.append(page.extract_text() or "")
+                except Exception:
+                    texts.append("")
+            return "\n".join(texts)
+
+    return await asyncio.to_thread(_sync_extract)
 
 
 @router.message()
@@ -256,37 +286,27 @@ async def handle_message(message: Message) -> None:
         await message.bot.send_chat_action(chat_id=message.chat.id, action="typing")
         buf = io.BytesIO()
         try:
-            # Prefer document.download() convenience method; fallback to bot.download
-            if hasattr(message.document, "download"):
-                await message.document.download(destination_file=buf)
-            else:
-                await message.bot.download(message.document.file_id, destination=buf)
+            # Download file into memory (aiogram Bot/File download supports BytesIO)
+            # Use message.bot to avoid circular imports
+            await message.bot.download(message.document, destination=buf)
             data = buf.getvalue()
-            extracted = ""
+            # Extract PDF text inside a thread to avoid blocking
             try:
-                import pypdf
-                reader = pypdf.PdfReader(io.BytesIO(data))
-                extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
-            except Exception:
-                try:
-                    # Try PyPDF2 as fallback
-                    from PyPDF2 import PdfReader
-                    reader = PdfReader(io.BytesIO(data))
-                    extracted = "\n".join(page.extract_text() or "" for page in reader.pages)
-                except Exception:
-                    # Try decoding as utf-8 text
-                    try:
-                        extracted = data.decode("utf-8")
-                    except Exception:
-                        extracted = data.decode("latin1", errors="ignore")[:20000]
+                extracted = await _extract_pdf_text_bytes(data)
+            except Exception as e:
+                logger.error(f"PDF Parsing Error: {e}", exc_info=True)
+                await _send_tracked(message, f"⚠️ <b>Hujjatni qayta ishlashda xatolik yuz berdi:</b> {str(e)}")
+                return
 
             if not extracted.strip():
                 await _send_tracked(message, "⚠️ <b>Hujjatdan matn olinmadi.</b> Iltimos, matnli fayl yoki PDF yuboring.")
                 return
 
+            # Limit size passed into model for safety
+            text_for_model = extracted[:30000]
             prompt = (
                 "Iltimos, quyidagi hujjat matnini executive xulosa qilib bering (qat'iy o'zbek tilida, qisqa va professional):\n\n"
-                + extracted[:30000]
+                + text_for_model
             )
 
             with get_session() as session:
@@ -301,8 +321,8 @@ async def handle_message(message: Message) -> None:
                     _track_sent_message(user.id, sent.chat.id, sent.message_id)
             return
         except Exception as exc:
-            logger.exception("Failed to process uploaded document: %s", exc)
-            await _send_tracked(message, "⚠️ <b>Hujjatni qayta ishlashda xatolik yuz berdi.</b>")
+            logger.error(f"Failed to process uploaded document: {exc}", exc_info=True)
+            await _send_tracked(message, f"⚠️ <b>Hujjatni qayta ishlashda xatolik yuz berdi:</b> {str(exc)}")
             return
 
     # 2) Normal free-text message path
@@ -324,7 +344,7 @@ async def handle_message(message: Message) -> None:
 
     # If the agent returned a pending-action marker, render confirmation keyboard
     if isinstance(raw_response, str) and raw_response.startswith("[PENDING_ACTION:"):
-        m = re.match(r"^\[PENDING_ACTION:([0-9a-fA-F]+)\]\\n(.*)$", raw_response, re.S)
+        m = re.match(r"^\[PENDING_ACTION:([0-9a-fA-F]+)\]\n(.*)$", raw_response, re.S)
         if m:
             pending_id, preview = m.group(1), m.group(2)
             keyboard = build_confirmation_keyboard(pending_id)

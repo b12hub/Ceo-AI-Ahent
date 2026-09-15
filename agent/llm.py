@@ -45,7 +45,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "openai/gpt-oss-20b")
-GOOGLE_MODEL = os.environ.get("GOOGLE_MODEL", "gemini-2.5-flash")
+GOOGLE_MODEL = os.environ.get("GOOGLE_MODEL", "gemini-3.6-flash")
 
 GROQ_MAX_RETRIES = int(os.environ.get("GROQ_MAX_RETRIES", "3"))
 GOOGLE_MAX_RETRIES = int(os.environ.get("GOOGLE_MAX_RETRIES", "2"))

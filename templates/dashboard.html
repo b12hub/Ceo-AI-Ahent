@@ -8,77 +8,112 @@
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 min-h-screen">
-  <div class="max-w-4xl mx-auto px-4 py-8">
-
-    <header class="mb-8 flex items-center justify-between">
+  <div class="max-w-5xl mx-auto px-4 py-8">
+    <header class="mb-8 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
       <div>
         <h1 class="text-2xl font-semibold tracking-tight">CEO Boshqaruv Paneli</h1>
-        <p class="text-sm text-slate-400">Bajarilmagan topshiriqlar va so'nggi qarorlar tahlili.</p>
+        <p class="text-sm text-slate-400">Bajarilmagan topshiriqlar va so'nggi qarorlar — tezkor ko'rinish.</p>
       </div>
-      <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400 ring-1 ring-inset ring-emerald-500/20">
-        <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-        Faol
-      </span>
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400 ring-1 ring-inset ring-emerald-500/20">
+          <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+          Faol
+        </span>
+        <a class="inline-flex items-center gap-2 rounded-md bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700" href="#">
+          Yangilash
+        </a>
+      </div>
     </header>
 
-    <!-- Outstanding Tasks -->
-    <section class="mb-8">
-      <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
-        Bajarilmagan Topshiriqlar
-        <span class="text-xs font-normal text-slate-500">({{ pending_tasks|length }} kutilmoqda)</span>
-      </h2>
+    <main class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Pending Tasks -->
+      <section class="bg-slate-900/60 rounded-xl p-4">
+        <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
+          Bajarilmagan Topshiriqlar
+          <span class="text-xs font-normal text-slate-500">({{ pending_tasks|length }})</span>
+        </h2>
 
-      {% if pending_tasks %}
-      <div class="overflow-hidden rounded-xl border border-slate-800 divide-y divide-slate-800">
-        {% for task, assignee_name in pending_tasks %}
-        <div class="flex items-start justify-between gap-4 bg-slate-900/60 p-4 hover:bg-slate-900 transition-colors">
-          <div class="min-w-0">
-            <p class="text-sm font-medium text-slate-100 truncate">{{ task.description }}</p>
-            <p class="mt-1 text-xs text-slate-400">Biriktirildi: {{ assignee_name }}</p>
-            <p class="mt-1 text-xs text-slate-400">Holat: <span class="font-medium">{{ task.status }}</span></p>
-          </div>
-          <div class="flex-shrink-0 text-right">
-            <span class="inline-block rounded-md bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20">
-              {{ task.deadline.strftime("%b %d, %Y %H:%M") }}
-            </span>
-          </div>
+        {% if pending_tasks %}
+        <div class="space-y-3">
+          {% for item in pending_tasks %}
+          {% set task = item.task %}
+          {% set assignee = item.assignee_name %}
+          <article class="flex items-start justify-between gap-4 p-3 rounded-lg bg-slate-800/40 hover:bg-slate-800 transition">
+            <div class="min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold bg-slate-700 text-slate-200">
+                  {{ assignee }}
+                </span>
+                <h3 class="ml-2 text-sm font-medium text-slate-100 truncate">{{ task.description }}</h3>
+              </div>
+              <p class="mt-2 text-xs text-slate-400">Vazifa: {{ task.description }}</p>
+              {% if task.deadline %}
+              <p class="mt-1 text-xs text-slate-400">Muddat: <span class="font-medium text-slate-200">{{ task.deadline.strftime("%Y-%m-%d") }}</span></p>
+              {% endif %}
+              <p class="mt-1 text-xs">
+                Holat:
+                {% if task.status == 'pending' %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400">Kutilmoqda</span>
+                {% elif task.status == 'in_progress' %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-400">Jarayonda</span>
+                {% elif task.status == 'completed' %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400">Tugallangan</span>
+                {% else %}
+                  <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-700 text-slate-200">{{ task.status }}</span>
+                {% endif %}
+              </p>
+            </div>
+            <div class="flex-shrink-0 text-right">
+              {% if task.deadline %}
+              <time class="text-xs text-slate-400">{{ task.deadline.strftime("%Y-%m-%d") }}</time>
+              {% endif %}
+            </div>
+          </article>
+          {% endfor %}
         </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="text-sm text-slate-500 italic">Hozirda bajarilmagan topshiriqlar mavjud emas.</p>
-      {% endif %}
-    </section>
+        {% else %}
+        <p class="text-sm text-slate-500 italic">Hozirda bajarilmagan topshiriqlar mavjud emas.</p>
+        {% endif %}
+      </section>
 
-    <!-- Recent Decisions -->
-    <section>
-      <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
-        So'nggi Qabul Qilingan Qarorlar
-        <span class="text-xs font-normal text-slate-500">(so'nggi {{ recent_decisions|length }} ta)</span>
-      </h2>
+      <!-- Recent Decisions -->
+      <section class="bg-slate-900/60 rounded-xl p-4">
+        <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
+          So'nggi Qabul Qilingan Qarorlar
+          <span class="text-xs font-normal text-slate-500">({{ recent_decisions|length }})</span>
+        </h2>
 
-      {% if recent_decisions %}
-      <div class="overflow-hidden rounded-xl border border-slate-800 divide-y divide-slate-800">
-        {% for decision, logger_name in recent_decisions %}
-        <div class="bg-slate-900/60 p-4 hover:bg-slate-900 transition-colors">
-          <div class="flex items-start justify-between gap-4">
-            <p class="text-sm font-medium text-slate-100">{{ decision.text }}</p>
-            <span class="flex-shrink-0 text-xs text-slate-500">
-              {{ decision.logged_at.strftime("%b %d, %Y %H:%M") }}
-            </span>
-          </div>
-          <p class="mt-1 text-xs text-slate-400">{{ decision.context }}</p>
-          <p class="mt-2 text-[11px] uppercase tracking-wide text-slate-600">Kiritdi: {{ logger_name }}</p>
+        {% if recent_decisions %}
+        <div class="space-y-3">
+          {% for item in recent_decisions %}
+          {% set decision = item.decision %}
+          {% set logger = item.logger_name %}
+          <article class="p-3 rounded-lg bg-slate-800/40 hover:bg-slate-800 transition">
+            <div class="flex items-start justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium text-slate-100">{{ decision.text }}</p>
+                {% if decision.context %}
+                <p class="mt-1 text-xs italic text-slate-400">{{ decision.context }}</p>
+                {% endif %}
+                <p class="mt-2 text-[11px] uppercase tracking-wide text-slate-600">Kiritdi: {{ logger }}</p>
+              </div>
+              <div class="flex-shrink-0 text-right">
+                {% if decision.logged_at %}
+                <time class="text-xs text-slate-400">{{ decision.logged_at.strftime("%Y-%m-%d") }}</time>
+                {% endif %}
+              </div>
+            </div>
+          </article>
+          {% endfor %}
         </div>
-        {% endfor %}
-      </div>
-      {% else %}
-      <p class="text-sm text-slate-500 italic">Hozircha qarorlar kiritilmagan.</p>
-      {% endif %}
-    </section>
+        {% else %}
+        <p class="text-sm text-slate-500 italic">Hozircha qarorlar kiritilmagan.</p>
+        {% endif %}
+      </section>
+    </main>
 
     <footer class="mt-10 text-center text-xs text-slate-600">
-      CEO_AI_test_bot — eng so'nggi ma'lumotlarni ko'rish uchun sahifani yangilang.
+      CEO_AI_test_bot — sahifani yangilab so'nggi ma'lumotlarni ko'ring.
     </footer>
   </div>
 

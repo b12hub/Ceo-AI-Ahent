@@ -1,3 +1,4 @@
+# api/main.py
 """
 api/main.py
 
@@ -5,9 +6,7 @@ FastAPI application exposing:
   * POST /webhook              — Telegram sends updates here
   * POST /api/trigger-brief    — n8n cron trigger -> daily_brief() -> CEO's Telegram
   * POST /api/bottleneck-alerts — n8n (or anything else) -> forward alert to CEO's Telegram
-  * GET  /dashboard            — Jinja2 dashboard (registered via api/dashboard.py)
-
-Run with: uvicorn api.main:app --host 0.0.0.0 --port 8000
+  * GET  /dashboard            — Jinja2 dashboard (rendered here)
 """
 
 from __future__ import annotations
@@ -18,14 +17,16 @@ from typing import AsyncIterator
 
 from aiogram.types import Update
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
+from sqlmodel import Session, select
 
 from agent.tools.registry import daily_brief, seed_company_documents
-from api.dashboard import router as dashboard_router
+from api.deps import get_db, templates
 from bot.config import INTERNAL_API_KEY, TELEGRAM_CE0_ID, WEBHOOK_SECRET, WEBHOOK_URL
 from bot.dispatcher import bot, dp
 from bot.utils import send_long_message
+from models import Task, Decision, User
 
 logger = logging.getLogger("api.main")
 
@@ -58,23 +59,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="CEO_AI_test_bot API", lifespan=lifespan)
-app.include_router(dashboard_router)
-
-# Serve compiled Tailwind / static assets if you add any under ./static
-# (kept optional: mounting a missing directory raises at import time, so
-# only enable this once ./static actually exists in your deployment).
-# app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 def verify_internal_api_key(x_api_key: str | None = Header(default=None)) -> None:
     """
-    Guard for the n8n-facing endpoints. Both endpoints can message the CEO
-    directly on Telegram, so — unlike the webhook, which Telegram itself
-    signs via WEBHOOK_SECRET — they need their own shared-secret check or
-    anyone who finds the URL can spam the CEO's phone.
+    Guard for the n8n-facing endpoints.
     """
     if INTERNAL_API_KEY is None:
-        # No key configured: fail closed rather than silently running unauthenticated.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="INTERNAL_API_KEY is not configured on the server.",
@@ -98,9 +89,7 @@ async def telegram_webhook(
     payload = await request.json()
     update = Update.model_validate(payload, context={"bot": bot})
 
-    # feed_webhook_update processes the update through CEOOnlyMiddleware and
-    # the routers registered in bot/dispatcher.py, then returns — Telegram
-    # just needs a fast 200 OK, it doesn't care about the handler's result.
+    # feed_webhook_update processes the update through middleware and handlers
     await dp.feed_webhook_update(bot, update)
     return {"ok": True}
 
@@ -138,3 +127,50 @@ async def bottleneck_alert(
     text = f"{header}\n\n{payload.alert}"
     await send_long_message(bot, TELEGRAM_CE0_ID, text)
     return {"status": "sent"}
+
+
+# ---------------------------------------------------------------------------
+# Dashboard (Jinja2)
+# ---------------------------------------------------------------------------
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard(request: Request, session: Session = Depends(get_db)) -> HTMLResponse:
+    """
+    Renders the CEO dashboard. Provides complete Task and Decision objects.
+    Template expects:
+      - pending_tasks: list of {"task": Task, "assignee_name": str}
+      - recent_decisions: list of {"decision": Decision, "logger_name": str}
+    """
+    # Pending tasks (status != 'completed')
+    pending_tasks_raw = session.exec(
+        select(Task).where(Task.status != "completed").order_by(Task.deadline.asc())
+    ).all()
+
+    pending_tasks = []
+    for t in pending_tasks_raw:
+        assignee_name = "—"
+        if getattr(t, "assignee_id", None):
+            assignee = session.get(User, t.assignee_id)
+            if assignee:
+                assignee_name = assignee.full_name
+        pending_tasks.append({"task": t, "assignee_name": assignee_name})
+
+    # Recent decisions (latest 10)
+    recent_decisions_raw = session.exec(
+        select(Decision).order_by(Decision.logged_at.desc()).limit(10)
+    ).all()
+
+    recent_decisions = []
+    for d in recent_decisions_raw:
+        logger_name = "—"
+        if getattr(d, "logger_id", None):
+            logger_user = session.get(User, d.logger_id)
+            if logger_user:
+                logger_name = logger_user.full_name
+        recent_decisions.append({"decision": d, "logger_name": logger_name})
+
+    return templates.TemplateResponse(
+        request=request,
+        name="dashboard.html",
+        context={"request": request, "pending_tasks": pending_tasks, "recent_decisions": recent_decisions}
+    )
