@@ -3,9 +3,31 @@ name = "ceo-ai-test-bot"
 version = "0.1.0"
 requires-python = ">=3.14"
 dependencies = [
+    "aiogram>=3.31.0",
+    "fastapi>=0.141.1",
     "groq>=1.7.0",
+    "logging>=0.4.9.6",
     "protobuf>=7.36.1",
     "python-dateutil>=2.9.0.post0",
     "python-dotenv>=1.2.3",
     "tenacity>=9.1.4",
+    "pgvector>=0.3.0",
+    "sqlmodel>=0.0.42",
+    "uvicorn>=0.53.0",
+    "psycopg2-binary>=2.9.13",
+    "jinja2>=3.1.6",
+    "alembic>=1.20.0",
 ]
+
+readme = "README.md"
+authors = [
+    { name = "notHero", email = "hnot779@gmail.com" }
+]
+
+[project.scripts]
+ceo-ai-test-bot = "ceo_ai_test_bot:main"
+
+[build-system]
+requires = ["uv_build>=0.12.13,<0.13.0"]
+build-backend = "uv_build"
+

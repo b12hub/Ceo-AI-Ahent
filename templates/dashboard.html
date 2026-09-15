@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CEO Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen">
+  <div class="max-w-4xl mx-auto px-4 py-8">
+
+    <header class="mb-8 flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-semibold tracking-tight">CEO Dashboard</h1>
+        <p class="text-sm text-slate-400">Live snapshot of outstanding work and recent calls.</p>
+      </div>
+      <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400 ring-1 ring-inset ring-emerald-500/20">
+        <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
+        Live
+      </span>
+    </header>
+
+    <!-- Outstanding Tasks -->
+    <section class="mb-8">
+      <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
+        Outstanding Tasks
+        <span class="text-xs font-normal text-slate-500">({{ pending_tasks|length }} pending)</span>
+      </h2>
+
+      {% if pending_tasks %}
+      <div class="overflow-hidden rounded-xl border border-slate-800 divide-y divide-slate-800">
+        {% for task, assignee_name in pending_tasks %}
+        <div class="flex items-start justify-between gap-4 bg-slate-900/60 p-4 hover:bg-slate-900 transition-colors">
+          <div class="min-w-0">
+            <p class="text-sm font-medium text-slate-100 truncate">{{ task.description }}</p>
+            <p class="mt-1 text-xs text-slate-400">Assigned to {{ assignee_name }}</p>
+          </div>
+          <div class="flex-shrink-0 text-right">
+            <span class="inline-block rounded-md bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20">
+              {{ task.deadline.strftime("%b %d, %Y %H:%M") }}
+            </span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-sm text-slate-500 italic">No pending tasks. Nothing outstanding right now.</p>
+      {% endif %}
+    </section>
+
+    <!-- Recent Decisions -->
+    <section>
+      <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
+        Recent Decisions
+        <span class="text-xs font-normal text-slate-500">(last {{ recent_decisions|length }})</span>
+      </h2>
+
+      {% if recent_decisions %}
+      <div class="overflow-hidden rounded-xl border border-slate-800 divide-y divide-slate-800">
+        {% for decision, logger_name in recent_decisions %}
+        <div class="bg-slate-900/60 p-4 hover:bg-slate-900 transition-colors">
+          <div class="flex items-start justify-between gap-4">
+            <p class="text-sm font-medium text-slate-100">{{ decision.text }}</p>
+            <span class="flex-shrink-0 text-xs text-slate-500">
+              {{ decision.logged_at.strftime("%b %d, %Y %H:%M") }}
+            </span>
+          </div>
+          <p class="mt-1 text-xs text-slate-400">{{ decision.context }}</p>
+          <p class="mt-2 text-[11px] uppercase tracking-wide text-slate-600">Logged by {{ logger_name }}</p>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-sm text-slate-500 italic">No decisions logged yet.</p>
+      {% endif %}
+    </section>
+
+    <footer class="mt-10 text-center text-xs text-slate-600">
+      CEO_AI_test_bot — refresh to pull the latest state.
+    </footer>
+  </div>
+
+  <script>
+    // Expand to full height inside the Telegram WebApp container.
+    if (window.Telegram && window.Telegram.WebApp) {
+      window.Telegram.WebApp.ready();
+      window.Telegram.WebApp.expand();
+    }
+  </script>
+</body>
+</html>
