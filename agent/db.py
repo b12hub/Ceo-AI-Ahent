@@ -14,7 +14,7 @@ from typing import Any, AsyncIterator, Iterator
 from sqlmodel import Session, create_engine
 
 DATABASE_URL = os.environ.get(
-    "DATABASE_URL", "postgresql+psycopg2://ceo_admin:securepassword123@localhost:5433/ceo_agent_db"
+    "DATABASE_URL", "postgresql+psycopg2://ceo_admin:securepassword123@localhost:5432/ceo_agent_db"
 )
 
 # Synchronous engine
