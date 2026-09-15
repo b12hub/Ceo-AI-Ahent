@@ -10,8 +10,10 @@ class User(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     telegram_id: Optional[int] = Field(default=None, sa_type=BigInteger, unique=True, index=True)
     full_name: str
-    role: str
+    role: str = Field(default="user")
     is_ceo: bool = Field(default=False)
+    email: Optional[str] = Field(default=None, unique=True, index=True)
+    hashed_password: Optional[str] = Field(default=None)
 
 class Task(SQLModel, table=True):
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

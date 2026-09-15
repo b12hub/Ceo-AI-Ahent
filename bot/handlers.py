@@ -216,9 +216,7 @@ async def handle_message(message: Message) -> None:
     try:
         with get_session() as session:
             user = get_or_create_ceo_user(session, full_name=message.from_user.full_name)
-            raw_response = await asyncio.to_thread(
-                run_agent_turn, str(user.id), prompt, session
-            )
+            raw_response = await run_agent_turn(str(user.id), prompt, session)
     except Exception:
         logger.exception("run_agent_turn failed for prompt: %r", prompt)
         await _send_tracked(

@@ -57,7 +57,7 @@ def _persist(session: Session, user_uuid: uuid.UUID, role: str, content: str, to
     session.commit()
 
 
-def run_agent_turn(user_id: str, prompt: str, session: Session) -> str:
+async def run_agent_turn(user_id: str, prompt: str, session: Session) -> str:
     """
     Execute one full conversational turn for `user_id`:
 
@@ -113,7 +113,7 @@ def run_agent_turn(user_id: str, prompt: str, session: Session) -> str:
 
         for tc in response.tool_calls:
             logger.info("Executing tool '%s' with args %s", tc.name, tc.arguments)
-            result = execute_tool(tc.name, tc.arguments)
+            result = await execute_tool(tc.name, tc.arguments)
             messages.append(
                 {
                     "role": "tool",

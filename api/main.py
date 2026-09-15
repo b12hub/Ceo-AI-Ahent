@@ -18,7 +18,6 @@ from typing import AsyncIterator
 
 from aiogram.types import Update
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
-from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -107,13 +106,13 @@ async def telegram_webhook(
 @app.post("/api/trigger-brief")
 async def trigger_brief(_: None = Depends(verify_internal_api_key)) -> dict[str, str]:
     """n8n calls this on a cron schedule; runs daily_brief() and pushes it to the CEO."""
-    brief_text = await run_in_threadpool(daily_brief)
+    brief_text = await daily_brief()
     await send_long_message(bot, TELEGRAM_CE0_ID, brief_text)
     return {"status": "sent"}
 
 
 class BottleneckAlertPayload(BaseModel):
-    message: str = Field(..., min_length=1, description="Alert body to forward to the CEO.")
+    alert: str = Field(..., min_length=1, description="Alert body to forward to the CEO.")
     source: str | None = Field(default=None, description="Where the alert originated, e.g. 'n8n:pipeline-monitor'.")
     severity: str | None = Field(default=None, description="e.g. 'low' | 'medium' | 'high' | 'critical'.")
 
@@ -130,6 +129,6 @@ async def bottleneck_alert(
     if payload.source:
         header += f" — {payload.source}"
 
-    text = f"{header}\n\n{payload.message}"
+    text = f"{header}\n\n{payload.alert}"
     await send_long_message(bot, TELEGRAM_CE0_ID, text)
     return {"status": "sent"}

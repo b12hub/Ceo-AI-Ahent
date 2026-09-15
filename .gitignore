@@ -20,10 +20,21 @@ env/
 *.sqlite3
 *.db
 
+# Alembic compiled caches (keep versions/ scripts, ignore their caches)
+alembic/versions/__pycache__/
 
+# Test & coverage artifacts
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
 
 # IDE & OS meta
 .vscode/
 .idea/
 .DS_Store
 *.swp
+Thumbs.db
+
+# Docker & runtime logs
+*.log
