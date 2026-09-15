@@ -21,7 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from agent.tools.registry import daily_brief
+from agent.tools.registry import daily_brief, seed_company_documents
 from api.dashboard import router as dashboard_router
 from bot.config import INTERNAL_API_KEY, TELEGRAM_CE0_ID, WEBHOOK_SECRET, WEBHOOK_URL
 from bot.dispatcher import bot, dp
@@ -33,6 +33,12 @@ logger = logging.getLogger("api.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # --- startup ---
+    # Ensure the company documents are seeded so RAG searches have baseline content.
+    try:
+        seed_company_documents()
+    except Exception as exc:
+        logger.exception("Failed to seed company documents on startup: %s", exc)
+
     if WEBHOOK_URL:
         await bot.set_webhook(
             url=WEBHOOK_URL,

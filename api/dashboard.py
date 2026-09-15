@@ -23,7 +23,7 @@ def dashboard(request: Request, session: Session = Depends(get_db)) -> HTMLRespo
     pending_tasks = session.exec(
         select(Task, User.full_name)
         .join(User, Task.assignee_id == User.id)
-        .where(Task.status == "pending")
+        .where(Task.status != "completed")
         .order_by(Task.deadline.asc())
     ).all()
 

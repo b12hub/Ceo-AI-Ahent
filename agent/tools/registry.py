@@ -28,11 +28,55 @@ from sqlmodel import select
 
 from agent.db import get_session, get_async_session
 from models import CompanyDocument, Decision, Meeting, Task, User
+from agent.pending_actions import add_pending, get_pending, pop_pending
 
 logger = logging.getLogger("agent.tools")
 
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "models/text-embedding-004")
 EMBEDDING_DIM = 768  # must match CompanyDocument.embedding's Vector(768)
+
+
+def seed_company_documents() -> None:
+    """Ensure a minimal set of CompanyDocument rows exist for RAG lookups.
+
+    This is safe to call repeatedly; it only inserts default docs when the
+    table is empty.
+    """
+    from sqlmodel import select
+
+    with get_session() as session:
+        existing = session.exec(select(CompanyDocument)).first()
+        if existing:
+            return
+
+        # Minimal illustrative documents; embeddings are zeroed vectors as a
+        # graceful placeholder. In production, run a proper ingestion pipeline
+        # that computes real embeddings.
+        placeholder_embedding = [0.0] * EMBEDDING_DIM
+        docs = [
+            CompanyDocument(
+                title="Kompaniya Strategiyasi — Q3/Q4 Maqsadlar",
+                content_chunk=("Maqsadlar: 1) 25% daromad o'sishi; 2) Yangi bozorlarga kirish; "
+                               "3) Mijozlar satisfaksiyasini oshirish."
+                               ),
+                embedding=placeholder_embedding,
+            ),
+            CompanyDocument(
+                title="Engineering OKR 2026",
+                content_chunk=("Maqsadlar: sifatli kod, yuklash vaqti kamayishi, avtomatlashtirilgan testlar, "
+                               "release tezligini oshirish."),
+                embedding=placeholder_embedding,
+            ),
+            CompanyDocument(
+                title="Remote Policy va Ishlash Qoidalari",
+                content_chunk=("Ish vaqti, remote kutubxonalar, masofaviy hamkorlik va uy-ro'yxatlari haqida siyosat."),
+                embedding=placeholder_embedding,
+            ),
+        ]
+        for d in docs:
+            session.add(d)
+        session.commit()
+        logger.info("Seeded %d company documents", len(docs))
 
 
 def _embed_text(text: str) -> list[float]:
@@ -304,33 +348,66 @@ async def summarize_document(file_path_or_bytes: Union[str, bytes]) -> str:
 async def search_company_docs(query: str, limit: int = 5) -> str:
     """
     Perform semantic RAG vector similarity search over CompanyDocument embeddings.
-    
-    Args:
-        query: Natural language query string.
-        limit: Max number of document chunks to retrieve.
+
+    Fallbacks to ILIKE title/content search and, if nothing found, returns a
+    structured list of available document titles as a safe fallback.
     """
+    like_pattern = f"%{query}%"
+
+    # First try vector search if embedding support is available
     try:
         query_vector = _embed_text(query)
     except Exception as exc:  # noqa: BLE001
-        return f"Embedding yaratishda xatolik: '{query}': {exc}"
+        logger.debug("Embedding generation failed, falling back to ILIKE search: %s", exc)
+        query_vector = None
 
     with get_session() as session:
-        results = session.exec(
-            select(
-                CompanyDocument,
-                CompanyDocument.embedding.cosine_distance(query_vector).label("distance"),
-            )
-            .order_by(CompanyDocument.embedding.cosine_distance(query_vector))
+        # Vector search path
+        if query_vector is not None:
+            try:
+                results = session.exec(
+                    select(
+                        CompanyDocument,
+                        CompanyDocument.embedding.cosine_distance(query_vector).label("distance"),
+                    )
+                    .order_by(CompanyDocument.embedding.cosine_distance(query_vector))
+                    .limit(limit)
+                ).all()
+
+                if results:
+                    lines = [f"'{query}' so'rovi bo'yicha topilgan {len(results)} ta hujjat parchalari:", ""]
+                    for doc, distance in results:
+                        lines.append(f"• [{doc.id}] {doc.title} (masofa={distance:.4f})\n  {doc.content_chunk[:300]}")
+                    return "\n".join(lines)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Vector search failed, falling back to ILIKE: %s", exc)
+
+        # Textual fallback (ILIKE over title/content)
+        results_text = session.exec(
+            select(CompanyDocument)
+            .where(CompanyDocument.title.ilike(like_pattern) | CompanyDocument.content_chunk.ilike(like_pattern))
+            .order_by(CompanyDocument.title.asc())
             .limit(limit)
         ).all()
 
-        if not results:
-            return f"'{query}' so'rovi bo'yicha kompaniya hujjatlari topilmadi."
+        if results_text:
+            lines = [f"'{query}' so'rovi bo'yicha topilgan {len(results_text)} ta hujjat:", ""]
+            for doc in results_text:
+                lines.append(f"• [{doc.id}] <b>{doc.title}</b>\n  {doc.content_chunk[:300]}")
+            return "\n".join(lines)
 
-        lines = [f"'{query}' so'rovi bo'yicha topilgan {len(results)} ta hujjat parchalari:", ""]
-        for doc, distance in results:
-            lines.append(f"• [{doc.id}] {doc.title} (masofa={distance:.4f})\n  {doc.content_chunk[:300]}")
-        return "\n".join(lines)
+        # Final graceful fallback: list available document titles so the user can
+        # refine their query instead of getting a hard 'not found' message.
+        available = session.exec(select(CompanyDocument).order_by(CompanyDocument.title.asc()).limit(20)).all()
+        if not available:
+            return f"'{query}' so'rovi bo'yicha kompaniya hujjatlari topilmadi va tizimda hech qanday hujjat mavjud emas."
+
+        titles = [f"• [{d.id}] {d.title}" for d in available]
+        return (
+            f"'{query}' bo'yicha to'g'ridan-to'g'ri mos hujjat topilmadi. Mavjud hujjat sarlavhalari:\n\n"
+            + "\n".join(titles)
+            + "\n\nIltimos, qidiruv so'rovini toraytiring yoki aniq hujjat nomini jo'nating."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -423,11 +500,38 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
     },
 ]
 
+# Wrapper helpers that create pending actions for write operations
+async def _assign_task_pending(person: str, text: str, deadline: str) -> str:
+    """Create pending assign_task action instead of committing immediately."""
+    pending_id = uuid.uuid4().hex
+    preview = (
+        f"<b>✅ Tasdiqlash talab qilinadi</b>\n"
+        f"<b>Amal:</b> Topshiriq yaratish\n"
+        f"<b>Biriktirilmoqda:</b> {person}\n"
+        f"<b>Topshiriq:</b> {text}\n"
+        f"<b>Muddati:</b> {deadline}\n"
+    )
+    add_pending(pending_id, {"name": "assign_task", "arguments": {"person": person, "text": text, "deadline": deadline}, "preview": preview, "created_at": datetime.utcnow().isoformat()})
+    return f"[PENDING_ACTION:{pending_id}]\n{preview}"
+
+
+async def _log_decision_pending(text: str, context: str, logger_id: str = "") -> str:
+    pending_id = uuid.uuid4().hex
+    preview = (
+        f"<b>✅ Tasdiqlash talab qilinadi</b>\n"
+        f"<b>Amal:</b> Qarorni saqlash\n"
+        f"<b>Qaror:</b> {text}\n"
+        f"<b>Kontekst:</b> {context}\n"
+    )
+    add_pending(pending_id, {"name": "log_decision", "arguments": {"text": text, "context": context, "logger_id": logger_id}, "preview": preview, "created_at": datetime.utcnow().isoformat()})
+    return f"[PENDING_ACTION:{pending_id}]\n{preview}"
+
+
 TOOL_DISPATCH: dict[str, Any] = {
     "daily_brief": daily_brief,
-    "log_decision": log_decision,
+    "log_decision": _log_decision_pending,
     "search_decisions": search_decisions,
-    "assign_task": assign_task,
+    "assign_task": _assign_task_pending,
     "summarize_document": summarize_document,
     "search_company_docs": search_company_docs,
 }
