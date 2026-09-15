@@ -92,31 +92,31 @@ def daily_brief() -> str:
             select(Decision).order_by(Decision.logged_at.desc()).limit(5)
         ).all()
 
-        lines: list[str] = ["## Daily Brief", ""]
+        lines: list[str] = ["<b>📊 Kunlik Brifing</b>", ""]
 
-        lines.append("### Tasks (pending)")
+        lines.append("<b>📋 Topshiriqlar (kutilmoqda):</b>")
         if not overdue_and_pending:
-            lines.append("- None outstanding.")
+            lines.append("• Bajarilmagan topshiriqlar mavjud emas.")
         else:
             for t in overdue_and_pending:
-                flag = " ⚠️ OVERDUE" if t.deadline < now else ""
-                lines.append(f"- [{t.id}] {t.description} — due {t.deadline.isoformat()}{flag}")
+                flag = " ⚠️ MUDDATI O'TGAN" if t.deadline < now else ""
+                lines.append(f"• [{t.id}] {t.description} — muddati: {t.deadline.isoformat()}{flag}")
 
         lines.append("")
-        lines.append("### Upcoming meetings")
+        lines.append("<b>📅 Kutilayotgan uchrashuvlar:</b>")
         if not upcoming_meetings:
-            lines.append("- None scheduled.")
+            lines.append("• Rejalashtirilgan uchrashuvlar mavjud emas.")
         else:
             for m in upcoming_meetings:
-                lines.append(f"- [{m.id}] {m.title} — {m.scheduled_for.isoformat()}")
+                lines.append(f"• [{m.id}] {m.title} — {m.scheduled_for.isoformat()}")
 
         lines.append("")
-        lines.append("### Recent decisions")
+        lines.append("<b>📝 So'nggi qarorlar:</b>")
         if not recent_decisions:
-            lines.append("- None logged yet.")
+            lines.append("• Hozircha qarorlar kiritilmagan.")
         else:
             for d in recent_decisions:
-                lines.append(f"- [{d.id}] {d.text} (logged {d.logged_at.isoformat()})")
+                lines.append(f"• [{d.id}] {d.text} (kiritilgan vaqti: {d.logged_at.isoformat()})")
 
         return "\n".join(lines)
 
@@ -132,7 +132,7 @@ def log_decision(text: str, context: str, logger_id: str) -> str:
     with get_session() as session:
         user = session.get(User, logger_uuid)
         if user is None:
-            return f"Error: no user found with id {logger_id}. Decision was NOT logged."
+            return f"Xatolik: {logger_id} IDli foydalanuvchi topilmadi. Qaror kiritilmadi."
 
         decision = Decision(
             text=text,
@@ -145,8 +145,8 @@ def log_decision(text: str, context: str, logger_id: str) -> str:
         session.refresh(decision)
 
         return (
-            f"Decision logged successfully. id={decision.id}, "
-            f"logged_at={decision.logged_at.isoformat()}, by={user.full_name}."
+            f"Qaror muvaffaqiyatli saqlandi. id={decision.id}, "
+            f"vaqti={decision.logged_at.isoformat()}, kim tomonidan={user.full_name}."
         )
 
 
@@ -167,11 +167,11 @@ def search_decisions(query: str) -> str:
         ).all()
 
         if not results:
-            return f"No decisions found matching '{query}'."
+            return f"'{query}' so'rovi bo'yicha hech qanday qaror topilmadi."
 
-        lines = [f"Found {len(results)} decision(s) matching '{query}':", ""]
+        lines = [f"'{query}' so'rovi bo'yicha {len(results)} ta qaror topildi:", ""]
         for d in results:
-            lines.append(f"- [{d.id}] {d.logged_at.isoformat()} — {d.text}\n  Context: {d.context}")
+            lines.append(f"• [{d.id}] {d.logged_at.isoformat()} — {d.text}\n  Kontekst: {d.context}")
         return "\n".join(lines)
 
 
@@ -186,15 +186,15 @@ def assign_task(description: str, assignee_id: str, deadline: str) -> str:
     try:
         parsed_deadline = dateparser.parse(deadline)
     except (dateparser.ParserError, ValueError, OverflowError) as exc:
-        return f"Error: could not parse deadline '{deadline}': {exc}. Task was NOT created."
+        return f"Xatolik: '{deadline}' muddati tushunilmadi: {exc}. Topshiriq yaratilmadi."
 
     if parsed_deadline is None:
-        return f"Error: could not parse deadline '{deadline}'. Task was NOT created."
+        return f"Xatolik: '{deadline}' muddati tushunilmadi. Topshiriq yaratilmadi."
 
     with get_session() as session:
         assignee = session.get(User, assignee_uuid)
         if assignee is None:
-            return f"Error: no user found with id {assignee_id}. Task was NOT created."
+            return f"Xatolik: {assignee_id} IDli foydalanuvchi topilmadi. Topshiriq yaratilmadi."
 
         task = Task(
             description=description,
@@ -208,8 +208,8 @@ def assign_task(description: str, assignee_id: str, deadline: str) -> str:
         session.refresh(task)
 
         return (
-            f"Task created. id={task.id}, assignee={assignee.full_name}, "
-            f"deadline={task.deadline.isoformat()}, status={task.status}."
+            f"Topshiriq yaratildi. id={task.id}, biriktirildi={assignee.full_name}, "
+            f"muddati={task.deadline.isoformat()}, holati={task.status}."
         )
 
 
@@ -218,26 +218,20 @@ def assign_task(description: str, assignee_id: str, deadline: str) -> str:
 # ---------------------------------------------------------------------------
 
 def summarize_document(document_id: str) -> str:
-    """
-    Fetch a CompanyDocument's stored chunk. The "summary" here is a light,
-    deterministic reduction (first N chars) — the outer agent loop is
-    responsible for turning this raw chunk into a natural-language summary
-    via the LLM, since this tool must never itself fabricate content.
-    """
+    """Fetch a CompanyDocument's stored chunk."""
     doc_uuid = _parse_uuid(document_id, "document_id")
 
     with get_session() as session:
         doc = session.get(CompanyDocument, doc_uuid)
         if doc is None:
-            return f"Error: no CompanyDocument found with id {document_id}."
+            return f"Xatolik: {document_id} IDli kompaniya hujjati topilmadi."
 
         preview = doc.content_chunk[:400] + ("..." if len(doc.content_chunk) > 400 else "")
         return (
-            f"Document '{doc.title}' (id={doc.id}).\n\n"
-            f"Full chunk content:\n{doc.content_chunk}\n\n"
-            f"(Preview for reference: {preview})\n\n"
-            "Instruction to model: summarize the above content_chunk faithfully — "
-            "do not add facts not present in it."
+            f"Hujjat: '{doc.title}' (id={doc.id}).\n\n"
+            f"Hujjat matni (burchagi):\n{doc.content_chunk}\n\n"
+            f"(Oldindan ko'rish: {preview})\n\n"
+            "Model uchun yo'riqnoma: Yuqoridagi hujjat matnini strictly o'zbek tilida londa xulosa qilib bering."
         )
 
 
@@ -250,13 +244,9 @@ def search_company_docs(query: str, limit: int = 5) -> str:
     try:
         query_vector = _embed_text(query)
     except Exception as exc:  # noqa: BLE001
-        return f"Error generating embedding for query '{query}': {exc}"
+        return f"Embedding yaratishda xatolik: '{query}': {exc}"
 
     with get_session() as session:
-        # `.cosine_distance()` is provided by pgvector.sqlalchemy's Vector
-        # comparator; lower distance = more similar. Falls back to the
-        # `<->` (L2) operator via `.max_inner_product()`/`.l2_distance()`
-        # if your pgvector version doesn't expose cosine_distance.
         results = session.exec(
             select(
                 CompanyDocument,
@@ -267,11 +257,11 @@ def search_company_docs(query: str, limit: int = 5) -> str:
         ).all()
 
         if not results:
-            return f"No company documents found matching '{query}'."
+            return f"'{query}' so'rovi bo'yicha kompaniya hujjatlari topilmadi."
 
-        lines = [f"Top {len(results)} document chunk(s) matching '{query}':", ""]
+        lines = [f"'{query}' so'rovi bo'yicha topilgan {len(results)} ta hujjat parchalari:", ""]
         for doc, distance in results:
-            lines.append(f"- [{doc.id}] {doc.title} (distance={distance:.4f})\n  {doc.content_chunk[:300]}")
+            lines.append(f"• [{doc.id}] {doc.title} (masofa={distance:.4f})\n  {doc.content_chunk[:300]}")
         return "\n".join(lines)
 
 

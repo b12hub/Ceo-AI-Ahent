@@ -26,5 +26,5 @@ engine = create_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 
 @contextmanager
 def get_session() -> Iterator[Session]:
-    with Session(engine) as session:
+    with Session(engine, expire_on_commit=False) as session:
         yield session

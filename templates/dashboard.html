@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="uz">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CEO Dashboard</title>
+  <title>CEO Boshqaruv Paneli</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://telegram.org/js/telegram-web-app.js"></script>
 </head>
@@ -12,20 +12,20 @@
 
     <header class="mb-8 flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-semibold tracking-tight">CEO Dashboard</h1>
-        <p class="text-sm text-slate-400">Live snapshot of outstanding work and recent calls.</p>
+        <h1 class="text-2xl font-semibold tracking-tight">CEO Boshqaruv Paneli</h1>
+        <p class="text-sm text-slate-400">Bajarilmagan topshiriqlar va so'nggi qarorlar tahlili.</p>
       </div>
       <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-xs font-medium text-emerald-400 ring-1 ring-inset ring-emerald-500/20">
         <span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>
-        Live
+        Faol
       </span>
     </header>
 
     <!-- Outstanding Tasks -->
     <section class="mb-8">
       <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
-        Outstanding Tasks
-        <span class="text-xs font-normal text-slate-500">({{ pending_tasks|length }} pending)</span>
+        Bajarilmagan Topshiriqlar
+        <span class="text-xs font-normal text-slate-500">({{ pending_tasks|length }} kutilmoqda)</span>
       </h2>
 
       {% if pending_tasks %}
@@ -34,7 +34,7 @@
         <div class="flex items-start justify-between gap-4 bg-slate-900/60 p-4 hover:bg-slate-900 transition-colors">
           <div class="min-w-0">
             <p class="text-sm font-medium text-slate-100 truncate">{{ task.description }}</p>
-            <p class="mt-1 text-xs text-slate-400">Assigned to {{ assignee_name }}</p>
+            <p class="mt-1 text-xs text-slate-400">Biriktirildi: {{ assignee_name }}</p>
           </div>
           <div class="flex-shrink-0 text-right">
             <span class="inline-block rounded-md bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-400 ring-1 ring-inset ring-amber-500/20">
@@ -45,15 +45,15 @@
         {% endfor %}
       </div>
       {% else %}
-      <p class="text-sm text-slate-500 italic">No pending tasks. Nothing outstanding right now.</p>
+      <p class="text-sm text-slate-500 italic">Hozirda bajarilmagan topshiriqlar mavjud emas.</p>
       {% endif %}
     </section>
 
     <!-- Recent Decisions -->
     <section>
       <h2 class="text-lg font-medium mb-3 flex items-center gap-2">
-        Recent Decisions
-        <span class="text-xs font-normal text-slate-500">(last {{ recent_decisions|length }})</span>
+        So'nggi Qabul Qilingan Qarorlar
+        <span class="text-xs font-normal text-slate-500">(so'nggi {{ recent_decisions|length }} ta)</span>
       </h2>
 
       {% if recent_decisions %}
@@ -67,17 +67,17 @@
             </span>
           </div>
           <p class="mt-1 text-xs text-slate-400">{{ decision.context }}</p>
-          <p class="mt-2 text-[11px] uppercase tracking-wide text-slate-600">Logged by {{ logger_name }}</p>
+          <p class="mt-2 text-[11px] uppercase tracking-wide text-slate-600">Kiritdi: {{ logger_name }}</p>
         </div>
         {% endfor %}
       </div>
       {% else %}
-      <p class="text-sm text-slate-500 italic">No decisions logged yet.</p>
+      <p class="text-sm text-slate-500 italic">Hozircha qarorlar kiritilmagan.</p>
       {% endif %}
     </section>
 
     <footer class="mt-10 text-center text-xs text-slate-600">
-      CEO_AI_test_bot — refresh to pull the latest state.
+      CEO_AI_test_bot — eng so'nggi ma'lumotlarni ko'rish uchun sahifani yangilang.
     </footer>
   </div>
 

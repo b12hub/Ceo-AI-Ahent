@@ -3,7 +3,7 @@ bot/handlers.py
 
 /start, /help, /reset, and main text handler routing into agent.loop.run_agent_turn.
 Includes HTTPS validation for Telegram Web Apps, executive response formatting,
-and message-ID tracking so /reset can bulk-delete visible chat history.
+message-ID tracking, TelegramBadRequest handling, and Uzbek localization.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import logging
 from typing import Optional
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
     InlineKeyboardButton,
@@ -36,23 +37,22 @@ router = Router(name="ceo-bot")
 
 
 def _dashboard_keyboard() -> Optional[InlineKeyboardMarkup]:
-    """Build inline keyboard for CEO Dashboard."""
+    """Build inline keyboard for CEO Dashboard in Uzbek."""
     url = DASHBOARD_BASE_URL.rstrip("/")
     is_valid_https = (
         url.startswith("https://")
         and "localhost" not in url
-
         and "127.0.0.1" not in url
     )
 
     if is_valid_https:
         button = InlineKeyboardButton(
-            text="📊 Open CEO Dashboard",
+            text="📊 CEO Boshqaruv Panelini Ochish",
             web_app=WebAppInfo(url=f"{url}/dashboard"),
         )
     else:
         button = InlineKeyboardButton(
-            text="🔗 Open Web Dashboard",
+            text="🔗 Veb Boshqaruv Paneli",
             url=f"{url}/dashboard"
             if url.startswith("http")
             else "http://localhost:8000/dashboard",
@@ -88,15 +88,15 @@ async def cmd_start(message: Message) -> None:
         user = get_or_create_ceo_user(session, full_name=message.from_user.full_name)
 
     text = (
-        f"👑 <b>Chief of Staff Online</b>\n"
+        f"👑 <b>Bosh Shtab Boshlig'i Tizimda</b>\n"
         f"────────────────────────\n"
-        f"Welcome back, <b>{user.full_name}</b>.\n\n"
-        f"I am initialized and synchronized with your workspace records. "
-        f"Ask me anything regarding active tasks, executive decisions, upcoming meetings, or documents.\n\n"
-        f"⚡ <b>Quick Commands:</b>\n"
-        f"• /help — Overview of capabilities\n"
-        f"• /reset — Clear active context & start fresh\n\n"
-        f"💡 <i>Try asking: \"Give me a daily brief\" or \"What's on my plate today?\"</i>"
+        f"Xush kelibsiz, <b>{user.full_name}</b>.\n\n"
+        f"Men sizning Bosh Shtab Boshlig'i yordamchingizman. "
+        f"Kompaniya topshiriqlari, strategik qarorlar, uchrashuvlar va hujjatlar bo'yicha savollaringizga javob berishga tayyorman.\n\n"
+        f"⚡ <b>Tezkor Buyruqlar:</b>\n"
+        f"• /help — Tizim imkoniyatlari sharhi\n"
+        f"• /reset — Muloqot tarixini tozalash va yangidan boshlash\n\n"
+        f"💡 <i>Sinab ko'ring: \"Bugungi kunlik brifingni ber\" yoki \"Mening zimmamda qanday topshiriqlar bor?\"</i>"
     )
     await _send_tracked(message, text, reply_markup=_dashboard_keyboard())
 
@@ -104,61 +104,69 @@ async def cmd_start(message: Message) -> None:
 @router.message(Command("help"))
 async def cmd_help(message: Message) -> None:
     text = (
-        f"📑 <b>Executive Assistant Capabilities</b>\n"
+        f"📑 <b>Bosh Shtab Boshlig'ining Imkoniyatlari</b>\n"
         f"────────────────────────\n"
-        f"• <b>Daily Operations:</b> Briefings on tasks, meetings, and recent decisions.\n"
-        f"• <b>Task Management:</b> Assign tasks and track deadlines across teams.\n"
-        f"• <b>Decision Logging:</b> Record key corporate decisions with full context.\n"
-        f"• <b>Knowledge Base:</b> Semantic search across company documentation.\n\n"
-        f"⚙️ <b>System Commands:</b>\n"
-        f"• /start — Display welcome card & dashboard link\n"
-        f"• /reset — Flush conversation context and visible chat history"
+        f"• <b>Kunlik Operatsiyalar:</b> Topshiriqlar, uchrashuvlar va qarorlar brifingi.\n"
+        f"• <b>Topshiriqlar Boshqaruvi:</b> Topshiriqlarni biriktirish va muddatlarini kuzatish.\n"
+        f"• <b>Qarorlarni Qayd Etish:</b> Kompaniya strategik qarorlarini to'liq konteksti bilan saqlash.\n"
+        f"• <b>Bilimlar Bazasi:</b> Kompaniya hujjatlari bo'yicha semantik qidiruv.\n\n"
+        f"⚙️ <b>Tizim Buyruqlari:</b>\n"
+        f"• /start — Xush kelibsiz xabari va panel havolasi\n"
+        f"• /reset — Muloqot xotirasi va chat tarixini o'chirish"
     )
     await _send_tracked(message, text, reply_markup=_dashboard_keyboard())
 
 
 @router.message(Command("reset"))
 async def cmd_reset(message: Message) -> None:
+    """Clear entire conversation memory from DB and bulk-delete tracked messages in Telegram UI."""
     with get_session() as session:
         user = get_or_create_ceo_user(session, full_name=message.from_user.full_name)
 
-        # 1. Fetch all tracked bot messages
-        tracked = session.exec(
-            select(BotSentMessage).where(BotSentMessage.user_id == user.id)
+        # 1. Extract primitive (chat_id, message_id) tuples while session is active
+        rows = session.exec(
+            select(BotSentMessage.chat_id, BotSentMessage.message_id)
+            .where(BotSentMessage.user_id == user.id)
         ).all()
+        to_delete: list[tuple[int, int]] = [(r[0], r[1]) for r in rows]
 
-        # 2. Clear conversation memory
+        # 2. Clear conversation memory from database
         session.exec(
             delete(ConversationMessage).where(ConversationMessage.user_id == user.id)
         )
         session.commit()
 
-    # 3. Bulk delete visible UI chat history (messages older than 48h will fail silently)
+    # 3. Bulk delete visible Telegram chat history using native primitive ints (no ORM attribute access)
     deleted, failed = 0, 0
-    for row in tracked:
+    for chat_id, message_id in to_delete:
         try:
-            await message.bot.delete_message(chat_id=row.chat_id, message_id=row.message_id)
+            await message.bot.delete_message(chat_id=chat_id, message_id=message_id)
             deleted += 1
-        except Exception:
+        except TelegramBadRequest as exc:
+            # Silently skip messages older than 48 hours or already deleted
+            logger.debug("Could not delete message %s: %s", message_id, exc)
             failed += 1
-        await asyncio.sleep(0.05)  # Stay under Telegram's rate limits
+        except Exception as exc:
+            logger.debug("Unexpected error deleting message %s: %s", message_id, exc)
+            failed += 1
+        await asyncio.sleep(0.03)  # Stay safely within Telegram API rate limits
 
-    # 4. Clear the tracked messages from DB
+    # 4. Clear the tracked messages table in database
     with get_session() as session:
         user = get_or_create_ceo_user(session, full_name=message.from_user.full_name)
         session.exec(delete(BotSentMessage).where(BotSentMessage.user_id == user.id))
         session.commit()
 
-    # 5. Delete the user's /reset command
+    # 5. Delete the triggering /reset command message
     try:
         await message.delete()
     except Exception:
         pass
 
     text = (
-        "🧹 <b>Context Reset Complete</b>\n"
+        "🧹 <b>Suhbat Tarixi Tozalandi</b>\n"
         "────────────────────────\n"
-        "Conversation memory and visible chat history cleared. Starting a clean session."
+        "Barcha muloqot xotirasi va xabarlar tarixi o'chirildi. Yangi seans boshlandi."
     )
     await _send_tracked(message, text)
 
@@ -179,14 +187,13 @@ async def handle_message(message: Message) -> None:
         logger.exception("run_agent_turn failed for prompt: %r", prompt)
         await _send_tracked(
             message,
-            "⚠️ <b>Execution Error</b>\n"
-            "An issue occurred processing that request. Please try again or run /reset.",
+            "⚠️ <b>Bajarishda Xatolik</b>\n"
+            "So'rovni qayta ishlashda xatolik yuz berdi. Iltimos, qaytadan urinib ko'ring yoki /reset buyrug'ini yuboring.",
         )
         return
 
     response = sanitize_for_telegram(raw_response)
 
-    # Ensure `send_long_message` returns the list of Sent Message objects
     sent_messages = await send_long_message(
         message.bot, message.chat.id, response, parse_mode="HTML"
     )
