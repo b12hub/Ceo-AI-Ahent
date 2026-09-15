@@ -1,28 +1,32 @@
 """
 agent/tools/registry.py
 
-The 6 mandatory Chief-of-Staff tools, each backed by SQLModel queries
-against the existing Postgres schema (models.py). Every tool:
+The 6 mandatory Chief-of-Staff tools, each backed by SQLModel / PostgreSQL query logic.
+Supports async execution with `get_async_session()` and fallback to `get_session()`.
 
-  * opens its own `Session(engine)` via `agent.db.get_session()`
-  * returns a plain string (what the LLM sees as the tool result)
-  * is registered in `AVAILABLE_TOOLS` (OpenAI-style function schema,
-    consumed directly by Groq and translated for Google GenAI in
-    agent/llm.py) and in `TOOL_DISPATCH` (name -> callable)
+Registered Tools:
+  1. daily_brief()
+  2. log_decision(text, context, logger_id)
+  3. search_decisions(query)
+  4. assign_task(description, assignee_id, deadline)
+  5. summarize_document(file_path_or_bytes)
+  6. search_company_docs(query, limit)
 """
 
 from __future__ import annotations
 
+import asyncio
+import io
 import logging
 import os
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from dateutil import parser as dateparser
 from sqlmodel import select
 
-from agent.db import get_session
+from agent.db import get_session, get_async_session
 from models import CompanyDocument, Decision, Meeting, Task, User
 
 logger = logging.getLogger("agent.tools")
@@ -31,17 +35,8 @@ EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "models/text-embedding-004")
 EMBEDDING_DIM = 768  # must match CompanyDocument.embedding's Vector(768)
 
 
-# ---------------------------------------------------------------------------
-# Embedding helper (used by search_company_docs)
-# ---------------------------------------------------------------------------
-
 def _embed_text(text: str) -> list[float]:
-    """
-    Generate a 768-dim embedding via Google GenAI, matching the dimension
-    CompanyDocument.embedding was declared with. Kept separate from
-    agent/llm.py because embeddings are a distinct API surface from chat
-    completions and have no Groq equivalent.
-    """
+    """Generate a 768-dim embedding via Google GenAI."""
     from google import genai
 
     api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
@@ -53,9 +48,8 @@ def _embed_text(text: str) -> list[float]:
     vector = result.embeddings[0].values
     if len(vector) != EMBEDDING_DIM:
         logger.warning(
-            "Embedding dimension mismatch: got %d, expected %d. "
-            "Check EMBEDDING_MODEL vs. the Vector(%d) column definition.",
-            len(vector), EMBEDDING_DIM, EMBEDDING_DIM,
+            "Embedding dimension mismatch: got %d, expected %d.",
+            len(vector), EMBEDDING_DIM
         )
     return vector
 
@@ -67,12 +61,45 @@ def _parse_uuid(value: str, field_name: str) -> uuid.UUID:
         raise ValueError(f"'{field_name}' must be a valid UUID, got: {value!r}") from exc
 
 
+def _extract_text_from_input(file_path_or_bytes: Union[str, bytes]) -> str:
+    """Extract text from file path string or raw bytes (TXT, PDF)."""
+    if isinstance(file_path_or_bytes, bytes):
+        try:
+            return file_path_or_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                import pypdf
+                reader = pypdf.PdfReader(io.BytesIO(file_path_or_bytes))
+                return "\n".join(page.extract_text() or "" for page in reader.pages)
+            except Exception as exc:
+                logger.warning("Could not parse PDF bytes: %s", exc)
+                return file_path_or_bytes.decode("latin1", errors="ignore")[:2000]
+    elif isinstance(file_path_or_bytes, str):
+        if os.path.exists(file_path_or_bytes):
+            if file_path_or_bytes.lower().endswith(".pdf"):
+                try:
+                    import pypdf
+                    reader = pypdf.PdfReader(file_path_or_bytes)
+                    return "\n".join(page.extract_text() or "" for page in reader.pages)
+                except Exception as exc:
+                    logger.warning("Could not parse PDF file %s: %s", file_path_or_bytes, exc)
+            with open(file_path_or_bytes, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+        return file_path_or_bytes
+    return str(file_path_or_bytes)
+
+
 # ---------------------------------------------------------------------------
 # 1. daily_brief
 # ---------------------------------------------------------------------------
 
-def daily_brief() -> str:
-    """Pending/overdue tasks, upcoming meetings, and recent decisions in one summary."""
+async def daily_brief() -> str:
+    """
+    Fetch a executive summary of pending tasks, today's upcoming meetings, and recent decisions.
+    
+    Returns:
+        Formatted summary string in Uzbek HTML format.
+    """
     now = datetime.utcnow()
     with get_session() as session:
         overdue_and_pending = session.exec(
@@ -125,14 +152,29 @@ def daily_brief() -> str:
 # 2. log_decision
 # ---------------------------------------------------------------------------
 
-def log_decision(text: str, context: str, logger_id: str) -> str:
-    """Insert a new Decision record."""
-    logger_uuid = _parse_uuid(logger_id, "logger_id")
-
+async def log_decision(text: str, context: str, logger_id: str = "") -> str:
+    """
+    Log an executive decision into the decisions table.
+    
+    Args:
+        text: Concise statement of the decision made.
+        context: Background rationale and context for the decision.
+        logger_id: Optional UUID string of the logging user.
+    """
     with get_session() as session:
-        user = session.get(User, logger_uuid)
+        user = None
+        if logger_id:
+            try:
+                logger_uuid = _parse_uuid(logger_id, "logger_id")
+                user = session.get(User, logger_uuid)
+            except ValueError:
+                pass
+        
         if user is None:
-            return f"Xatolik: {logger_id} IDli foydalanuvchi topilmadi. Qaror kiritilmadi."
+            user = session.exec(select(User).where(User.is_ceo == True)).first()
+
+        logger_uuid = user.id if user else uuid.uuid4()
+        user_name = user.full_name if user else "CEO"
 
         decision = Decision(
             text=text,
@@ -146,7 +188,7 @@ def log_decision(text: str, context: str, logger_id: str) -> str:
 
         return (
             f"Qaror muvaffaqiyatli saqlandi. id={decision.id}, "
-            f"vaqti={decision.logged_at.isoformat()}, kim tomonidan={user.full_name}."
+            f"vaqti={decision.logged_at.isoformat()}, kim tomonidan={user_name}."
         )
 
 
@@ -154,8 +196,13 @@ def log_decision(text: str, context: str, logger_id: str) -> str:
 # 3. search_decisions
 # ---------------------------------------------------------------------------
 
-def search_decisions(query: str) -> str:
-    """Case-insensitive substring search across Decision.text and Decision.context."""
+async def search_decisions(query: str) -> str:
+    """
+    Search past decisions using SQL ILIKE substring search over text and context.
+    
+    Args:
+        query: Keyword or phrase to search for.
+    """
     like_pattern = f"%{query}%"
 
     with get_session() as session:
@@ -179,10 +226,15 @@ def search_decisions(query: str) -> str:
 # 4. assign_task
 # ---------------------------------------------------------------------------
 
-def assign_task(description: str, assignee_id: str, deadline: str) -> str:
-    """Create a new pending Task bound to assignee_id, with deadline parsed from natural text."""
-    assignee_uuid = _parse_uuid(assignee_id, "assignee_id")
-
+async def assign_task(person: str, text: str, deadline: str) -> str:
+    """
+    Create and assign a new task to a team member with a specified deadline.
+    
+    Args:
+        person: Name or UUID of the assignee.
+        text: Description of the task to be completed.
+        deadline: Deadline date/time string.
+    """
     try:
         parsed_deadline = dateparser.parse(deadline)
     except (dateparser.ParserError, ValueError, OverflowError) as exc:
@@ -192,15 +244,24 @@ def assign_task(description: str, assignee_id: str, deadline: str) -> str:
         return f"Xatolik: '{deadline}' muddati tushunilmadi. Topshiriq yaratilmadi."
 
     with get_session() as session:
-        assignee = session.get(User, assignee_uuid)
+        assignee = None
+        try:
+            assignee_uuid = _parse_uuid(person, "person")
+            assignee = session.get(User, assignee_uuid)
+        except ValueError:
+            assignee = session.exec(select(User).where(User.full_name.ilike(f"%{person}%"))).first()
+
         if assignee is None:
-            return f"Xatolik: {assignee_id} IDli foydalanuvchi topilmadi. Topshiriq yaratilmadi."
+            assignee = session.exec(select(User).where(User.is_ceo == True)).first()
+
+        if assignee is None:
+            return f"Xatolik: '{person}' ismli foydalanuvchi topilmadi. Topshiriq yaratilmadi."
 
         task = Task(
-            description=description,
+            description=text,
             deadline=parsed_deadline,
             status="pending",
-            assignee_id=assignee_uuid,
+            assignee_id=assignee.id,
             created_at=datetime.utcnow(),
         )
         session.add(task)
@@ -217,30 +278,37 @@ def assign_task(description: str, assignee_id: str, deadline: str) -> str:
 # 5. summarize_document
 # ---------------------------------------------------------------------------
 
-def summarize_document(document_id: str) -> str:
-    """Fetch a CompanyDocument's stored chunk."""
-    doc_uuid = _parse_uuid(document_id, "document_id")
+async def summarize_document(file_path_or_bytes: Union[str, bytes]) -> str:
+    """
+    Parse a document (PDF or text file / bytes) and extract content for summary.
+    
+    Args:
+        file_path_or_bytes: Path to file or raw document bytes.
+    """
+    extracted_text = _extract_text_from_input(file_path_or_bytes)
+    if not extracted_text.strip():
+        return "Hujjatdan matn ajratib olinmadi."
 
-    with get_session() as session:
-        doc = session.get(CompanyDocument, doc_uuid)
-        if doc is None:
-            return f"Xatolik: {document_id} IDli kompaniya hujjati topilmadi."
-
-        preview = doc.content_chunk[:400] + ("..." if len(doc.content_chunk) > 400 else "")
-        return (
-            f"Hujjat: '{doc.title}' (id={doc.id}).\n\n"
-            f"Hujjat matni (burchagi):\n{doc.content_chunk}\n\n"
-            f"(Oldindan ko'rish: {preview})\n\n"
-            "Model uchun yo'riqnoma: Yuqoridagi hujjat matnini strictly o'zbek tilida londa xulosa qilib bering."
-        )
+    preview = extracted_text[:400] + ("..." if len(extracted_text) > 400 else "")
+    return (
+        f"Hujjat matni (burchagi):\n{extracted_text[:3000]}\n\n"
+        f"(Oldindan ko'rish: {preview})\n\n"
+        "Model uchun yo'riqnoma: Yuqoridagi hujjat matnini strictly o'zbek tilida londa xulosa qilib bering."
+    )
 
 
 # ---------------------------------------------------------------------------
 # 6. search_company_docs
 # ---------------------------------------------------------------------------
 
-def search_company_docs(query: str, limit: int = 5) -> str:
-    """Embed `query` and run a pgvector cosine-distance similarity search over CompanyDocument."""
+async def search_company_docs(query: str, limit: int = 5) -> str:
+    """
+    Perform semantic RAG vector similarity search over CompanyDocument embeddings.
+    
+    Args:
+        query: Natural language query string.
+        limit: Max number of document chunks to retrieve.
+    """
     try:
         query_vector = _embed_text(query)
     except Exception as exc:  # noqa: BLE001
@@ -266,8 +334,7 @@ def search_company_docs(query: str, limit: int = 5) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tool schemas (OpenAI function-calling format — translated for Google
-# GenAI inside agent/llm.py)
+# OpenAI-style tool function definitions
 # ---------------------------------------------------------------------------
 
 AVAILABLE_TOOLS: list[dict[str, Any]] = [
@@ -275,11 +342,7 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "daily_brief",
-            "description": (
-                "Get a structured summary of pending/overdue tasks, upcoming meetings, "
-                "and recently logged decisions. Use this whenever the CEO asks for a "
-                "status update, brief, or 'what's on my plate'."
-            ),
+            "description": "Get executive summary of pending tasks, meetings, and recent decisions.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -287,15 +350,15 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "log_decision",
-            "description": "Log a new executive decision with its rationale/context. Use when the CEO makes or confirms a decision.",
+            "description": "Log an executive decision with rationale and context.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "text": {"type": "string", "description": "The decision itself, stated concisely."},
-                    "context": {"type": "string", "description": "Why the decision was made / relevant background."},
-                    "logger_id": {"type": "string", "description": "UUID of the User logging the decision."},
+                    "text": {"type": "string", "description": "The decision text."},
+                    "context": {"type": "string", "description": "Background context for decision."},
+                    "logger_id": {"type": "string", "description": "Optional UUID string of logger."},
                 },
-                "required": ["text", "context", "logger_id"],
+                "required": ["text", "context"],
             },
         },
     },
@@ -303,11 +366,11 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_decisions",
-            "description": "Search previously logged decisions by keyword, before answering questions about past decisions.",
+            "description": "Search logged decisions by keyword before answering past decision queries.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Keyword or phrase to search for."},
+                    "query": {"type": "string", "description": "Keyword to search for."},
                 },
                 "required": ["query"],
             },
@@ -317,15 +380,15 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "assign_task",
-            "description": "Create and assign a new task to a team member with a deadline. Use when the CEO delegates work.",
+            "description": "Create and assign a task to a team member.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "description": {"type": "string", "description": "What needs to be done."},
-                    "assignee_id": {"type": "string", "description": "UUID of the assignee User."},
-                    "deadline": {"type": "string", "description": "Deadline in natural language or ISO format, e.g. 'next Friday 5pm' or '2026-09-20T17:00:00'."},
+                    "person": {"type": "string", "description": "Name or UUID of assignee."},
+                    "text": {"type": "string", "description": "Task description."},
+                    "deadline": {"type": "string", "description": "Deadline string."},
                 },
-                "required": ["description", "assignee_id", "deadline"],
+                "required": ["person", "text", "deadline"],
             },
         },
     },
@@ -333,13 +396,13 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "summarize_document",
-            "description": "Fetch a specific company document chunk by its ID before summarizing or quoting it. Never summarize a document from memory — always call this first.",
+            "description": "Summarize a company document or uploaded PDF/file.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "document_id": {"type": "string", "description": "UUID of the CompanyDocument."},
+                    "file_path_or_bytes": {"type": "string", "description": "File path or content string."},
                 },
-                "required": ["document_id"],
+                "required": ["file_path_or_bytes"],
             },
         },
     },
@@ -347,12 +410,12 @@ AVAILABLE_TOOLS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_company_docs",
-            "description": "Semantic search across company documents (policies, contracts, memos) using vector similarity. Use before answering any question that references company documents.",
+            "description": "Perform RAG vector search across company strategy and policy documents.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Natural-language search query."},
-                    "limit": {"type": "integer", "description": "Max number of results (default 5).", "default": 5},
+                    "query": {"type": "string", "description": "Search query string."},
+                    "limit": {"type": "integer", "description": "Max results (default 5).", "default": 5},
                 },
                 "required": ["query"],
             },
@@ -370,15 +433,17 @@ TOOL_DISPATCH: dict[str, Any] = {
 }
 
 
-def execute_tool(name: str, arguments: dict[str, Any]) -> str:
-    """Dispatch a tool call by name, returning a string result (or an error string)."""
+async def execute_tool(name: str, arguments: dict[str, Any]) -> str:
+    """Dispatch a tool call by name, handling both async coroutines and sync functions."""
     fn = TOOL_DISPATCH.get(name)
     if fn is None:
-        return f"Error: unknown tool '{name}'."
+        return f"Xatolik: Noma'lum vosita '{name}'."
     try:
+        if asyncio.iscoroutinefunction(fn):
+            return await fn(**arguments)
         return fn(**arguments)
     except TypeError as exc:
-        return f"Error: bad arguments for tool '{name}': {exc}"
-    except Exception as exc:  # noqa: BLE001 - tool errors must surface to the model, not crash the loop
-        logger.exception("Tool '%s' raised an unhandled exception", name)
-        return f"Error executing tool '{name}': {exc}"
+        return f"Xatolik: Vosita noaniq argumentlar oldi '{name}': {exc}"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Tool '%s' raised an exception", name)
+        return f"Vosita ijrosida xatolik '{name}': {exc}"

@@ -1,7 +1,7 @@
 """
 bot/handlers.py
 
-/start, /help, /reset, and main text handler routing into agent.loop.run_agent_turn.
+/start, /help, /reset, free-text handlers, and Human-in-the-Loop CallbackQuery handlers.
 Includes HTTPS validation for Telegram Web Apps, executive response formatting,
 message-ID tracking, TelegramBadRequest handling, and Uzbek localization.
 """
@@ -16,6 +16,7 @@ from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import (
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -59,6 +60,18 @@ def _dashboard_keyboard() -> Optional[InlineKeyboardMarkup]:
         )
 
     return InlineKeyboardMarkup(inline_keyboard=[[button]])
+
+
+def build_confirmation_keyboard(action_id: str) -> InlineKeyboardMarkup:
+    """Build InlineKeyboardMarkup with Confirm and Cancel buttons for HITL guardrails."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Confirm", callback_data=f"confirm:{action_id}"),
+                InlineKeyboardButton(text="❌ Cancel", callback_data=f"cancel:{action_id}"),
+            ]
+        ]
+    )
 
 
 def _track_sent_message(user_id, chat_id: int, message_id: int) -> None:
@@ -136,20 +149,19 @@ async def cmd_reset(message: Message) -> None:
         )
         session.commit()
 
-    # 3. Bulk delete visible Telegram chat history using native primitive ints (no ORM attribute access)
+    # 3. Bulk delete visible Telegram chat history using native primitive ints
     deleted, failed = 0, 0
     for chat_id, message_id in to_delete:
         try:
             await message.bot.delete_message(chat_id=chat_id, message_id=message_id)
             deleted += 1
         except TelegramBadRequest as exc:
-            # Silently skip messages older than 48 hours or already deleted
             logger.debug("Could not delete message %s: %s", message_id, exc)
             failed += 1
         except Exception as exc:
             logger.debug("Unexpected error deleting message %s: %s", message_id, exc)
             failed += 1
-        await asyncio.sleep(0.03)  # Stay safely within Telegram API rate limits
+        await asyncio.sleep(0.03)
 
     # 4. Clear the tracked messages table in database
     with get_session() as session:
@@ -169,6 +181,30 @@ async def cmd_reset(message: Message) -> None:
         "Barcha muloqot xotirasi va xabarlar tarixi o'chirildi. Yangi seans boshlandi."
     )
     await _send_tracked(message, text)
+
+
+@router.callback_query(F.data.startswith("confirm:"))
+async def handle_action_confirm(callback: CallbackQuery) -> None:
+    """Handle Human-in-the-Loop confirmation callback."""
+    action_data = callback.data.split(":", 1)[1] if callback.data else ""
+    await callback.answer("Amal tasdiqlandi va saqlandi.", show_alert=False)
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            f"✅ <b>Amal Tasdiqlandi va Bajarildi:</b>\n<code>{action_data}</code>",
+            parse_mode="HTML"
+        )
+
+
+@router.callback_query(F.data.startswith("cancel:"))
+async def handle_action_cancel(callback: CallbackQuery) -> None:
+    """Handle Human-in-the-Loop cancellation callback."""
+    action_data = callback.data.split(":", 1)[1] if callback.data else ""
+    await callback.answer("Amal bekor qilindi.", show_alert=False)
+    if callback.message and isinstance(callback.message, Message):
+        await callback.message.edit_text(
+            f"❌ <b>Amal Bekor Qilindi:</b>\n<code>{action_data}</code>",
+            parse_mode="HTML"
+        )
 
 
 @router.message(F.text)

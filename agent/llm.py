@@ -311,7 +311,7 @@ def get_llm_response(messages: list[dict], tools: Optional[list[dict]] = None) -
     groq_error: Optional[Exception] = None
     try:
         return _call_groq(messages, tools)
-    except Exception as exc:  # noqa: BLE001 - deliberately broad: any Groq failure triggers fallback
+    except Exception as exc:  # noqa: BLE001
         groq_error = exc
         logger.warning("Groq call failed (%s). Falling back to Google GenAI.", exc)
 
@@ -322,6 +322,22 @@ def get_llm_response(messages: list[dict], tools: Optional[list[dict]] = None) -
         raise ProviderExhaustedError(
             f"Both providers failed. Groq error: {groq_error!r}; Google error: {google_exc!r}"
         ) from google_exc
+
+
+def generate_agent_response(
+    prompt: str | list[dict],
+    tools: Optional[list[dict]] = None
+) -> LLMResponse:
+    """
+    Public entrypoint for generating agent responses with Groq primary + Google GenAI fallback.
+    Accepts either a string prompt or an OpenAI-style message list.
+    """
+    if isinstance(prompt, str):
+        messages = [{"role": "user", "content": prompt}]
+    else:
+        messages = prompt
+    return get_llm_response(messages, tools=tools)
+
 
 completion_with_backoff = get_llm_response
 

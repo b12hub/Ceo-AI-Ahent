@@ -1,8 +1,8 @@
 """
 bot/middleware.py
 
-Restricts the entire bot to a single authorized user: the CEO (TELEGRAM_CE0_ID).
-Extracts users across all Telegram update types and performs safe string/int checks.
+Authorization Middleware restricting bot interaction exclusively to users in ALLOWED_USERS.
+Extracts Telegram user across message, callback query, and update types.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Update, User as TelegramUser
 
-from bot.config import TELEGRAM_CE0_ID
+from bot.config import ALLOWED_USERS, TELEGRAM_CE0_ID
 
 logger = logging.getLogger("bot.middleware")
 
@@ -50,7 +50,7 @@ def _extract_from_user(event: TelegramObject) -> TelegramUser | None:
 
 
 class CEOOnlyMiddleware(BaseMiddleware):
-    """Drops any update not originating from TELEGRAM_CE0_ID."""
+    """Drops any update not originating from ALLOWED_USERS."""
 
     async def __call__(
         self,
@@ -60,20 +60,30 @@ class CEOOnlyMiddleware(BaseMiddleware):
     ) -> Any:
         user = _extract_from_user(event)
 
-        incoming_id = str(user.id).strip() if user else ""
-        expected_id = str(TELEGRAM_CE0_ID).strip()
+        if not user:
+            logger.warning("Dropped update with missing user object.")
+            return None
 
-        if not user or incoming_id != expected_id:
+        user_id = user.id
+
+        # Check against integer ALLOWED_USERS list or string TELEGRAM_CE0_ID fallback
+        is_allowed = (
+            user_id in ALLOWED_USERS
+            or str(user_id).strip() == str(TELEGRAM_CE0_ID).strip()
+        )
+
+        if not is_allowed:
             logger.warning(
-                "Unauthorized update dropped (received user_id=%s, expected=%s, username=%s)",
-                incoming_id or "unknown",
-                expected_id or "unset",
+                "Unauthorized update dropped (user_id=%d, username=%s, allowed=%s)",
+                user_id,
                 getattr(user, "username", "unknown"),
+                ALLOWED_USERS,
             )
             return None
 
         return await handler(event, data)
 
 
-# Alias class name for compatibility with dispatcher imports
+# Alias class names for compatibility
 CEOMiddleware = CEOOnlyMiddleware
+AuthMiddleware = CEOOnlyMiddleware
